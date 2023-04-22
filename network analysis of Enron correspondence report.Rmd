@@ -1,0 +1,377 @@
+---
+title: 'Взаимосвязи в сети корпоративной переписки сотрудников энергетической компании "Enron": отчет'
+author: "Пясецкая Вероника, bruh-veronika"
+output: 
+  html_document: 
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Загрузка данных
+
+```{r message = F,warning=FALSE}
+library(igraphdata)
+library(igraph)
+library(ggraph)
+library(dplyr)
+data(enron) 
+library(lubridate)
+source("~/shared/minor2_2022/2-tm-net/hw/personalTask.R")
+start_date = hw_net_get_start_date()
+# определяем конечную точку месяца
+last_date = start_date + dmonths(1)
+time = as_date(as_datetime(E(enron)$Time))
+# убираем вершины раньше начальной точки и позже конечной
+net = enron %>% delete_edges(E(enron)[time < start_date | time > last_date])
+# убираем связи вершины самой с собой (согласно данным, иногда люди себя в копию ставят)
+net = simplify(net, remove.multiple = F)
+# убираем обособленные вершины
+net = net %>% delete_vertices(V(net)[degree(net) == 0])
+net
+```
+
+Анализируются данные с `r start_date` по `r last_date`
+
+
+## Описание сети
+
+### Выявление значимых вершин
+**Использованные меры центральности: Cтепень & Битвинность**
+Отберём самых важных сотрудников с точки зрения Степени и Посредничества 
+
+```{r message = F,warning=FALSE}
+df = igraph::as_data_frame(net)
+name = V(net)$Name
+topic_ldc = E(net)$LDC_topic
+V(net)$degree = degree(net)
+V(net)$betweenness = betweenness(net)
+Reciptype = E(net)$Reciptype 
+
+vertexes_metrics = data.frame(name = V(net)$Name,
+                         note = V(net)$Note,
+                         email =  V(net)$Email,
+                         degree = degree(net),
+                         betweenness = betweenness(net))
+
+vertexes_metrics$name[vertexes_metrics$email == "liz.taylor"] = "Elizabeth Taylor"
+vertexes_metrics = vertexes_metrics %>% mutate(position = str_extract(note, "^([^,])+"))
+
+vertexes_metrics_filt_d1 = vertexes_metrics  %>% filter (degree >= quantile(degree, 0.9)) %>% select(-betweenness)
+colnames(vertexes_metrics_filt_d1)[4] ="centrality"
+vertexes_metrics_filt_b1 = vertexes_metrics  %>% filter (betweenness >= quantile(betweenness, 0.9)) %>% select(-degree) 
+colnames(vertexes_metrics_filt_b1)[4] ="centrality"
+
+compare1 = rbind(vertexes_metrics_filt_d1 %>% mutate(measure = "degree"),
+vertexes_metrics_filt_b1 %>% mutate(measure = "betweenness"))
+
+ggplot(compare1) + geom_col(aes(x = reorder(name,centrality), y = centrality, fill = measure)) +facet_wrap(~measure, scales = "free") + coord_flip() +xlab("employee") +
+  scale_fill_manual(values=c("cornflowerblue", "darksalmon"))
+
+ggplot(compare1) + geom_col(aes(x = reorder(name,centrality), y = centrality ,fill = measure), position = "dodge") + coord_flip() + xlab("employee") + scale_fill_manual(values=c("cornflowerblue", "darksalmon"))
+
+
+
+```
+
+Посмотрим на них и их место в сети 
+
+```{r message = F,warning=FALSE}
+gr_degree = ggraph(net, layout = "kk") +
+      geom_node_point(aes(filter = degree < quantile(degree, 0.9), size = log(V(net)$degree)
+                          ),alpha = 0.5,col = "gray60") +
+      geom_node_point(aes(filter = degree >= quantile(degree, 0.9), size = log(V(net)$degree)
+                          ), col = "darksalmon", alpha = 0.8) +
+      geom_node_point(aes(filter = V(net)$degree == 2140, size = log(V(net)$degree)
+                          ), col = "gold",  alpha = 1) +
+      geom_edge_link(width = 0.05, alpha = 0.15, start_cap = circle(2, 'mm'), end_cap =
+                       circle(2, 'mm'), edge_colour = "grey20", arrow = arrow( angle = 10, length = unit(0.05, "inches"), ends = "last", type = "closed")) +
+      geom_node_text(aes(filter = degree >= quantile(degree, 0.9) & V(net)$degree != 2140, label = V(net)$Name, size = log(V(net)$degree)/4),alpha = 1, nudge_y = 0.17,check_overlap = T) +  
+  geom_node_text(aes(filter = V(net)$degree == 2140, label = "Elizabeth Taylor", size = log(V(net)$degree)/5),alpha = 1, nudge_y = - 0.1 ) +
+      theme_void() +
+      theme(legend.position = "none") 
+
+gr_betw = ggraph(net, layout = "kk") +
+      geom_node_point(aes(filter = V(net)$betweenness < quantile(betweenness, 0.9), size = log(V(net)$betweenness)),alpha = 0.5,col = "gray60") +
+      geom_node_point(aes(filter = V(net)$betweenness < 1, size = 0.01/100000),alpha = 0.5, col = "gray60") +
+      geom_node_point(aes(filter = V(net)$betweenness >= quantile(betweenness, 0.9), size = log(V(net)$betweenness)), col = "cornflowerblue", alpha = 0.8) +
+      geom_node_point(aes(filter = V(net)$degree == 2140, size = log(V(net)$betweenness)
+                          ), col = "gold",  alpha = 1) +
+      geom_edge_link(width = 0.05, alpha = 0.15, start_cap = circle(2, 'mm'), end_cap =
+                       circle(2, 'mm'), edge_colour = "grey20", arrow = arrow( angle = 10, length = unit(0.05, "inches"), ends = "last", type = "closed")) +
+      geom_node_text(aes(filter = V(net)$betweenness >= quantile(betweenness, 0.9) & V(net)$degree != 2140 , label = V(net)$Name, size = log(V(net)$betweenness)/300), alpha = 1,check_overlap = T, repel = T) +
+  geom_node_text(aes(filter = V(net)$degree == 2140, label = "Elizabeth Taylor", size = log(V(net)$betweenness)/70),alpha = 1) +
+      theme_void() +
+      theme(legend.position = "none") 
+
+library(ggpubr)
+figure_1 = ggarrange(gr_degree,gr_betw,labels = c("Degree", "Betweenness"),nrow = 1, ncol = 2)
+figure_1
+
+
+```
+
+
+
+
+
+*Вывод:* Визуально сеть разделена на две группы, по всей видимости являющиейся разными департаментами.В сети ожидаемо присутствуют акторы, важные по обеим характеристикам, из них можно выделить Elizabeth Taylor и Louise Kitchen, они обе располагаются в центре сети, Elizabeth Taylor выделена жёлтым, как сотрудник с наивысшей степенью и битвинностью. Так же стоит выделить James Steffes и Shelley Corman обладающих высокими значениями центральности по посредничеству, а так же Kevin Presto, который важен по обеим характеристикам. Из визуализации закономерно заметно, что акторы с наивысшей степенью сосредоточены ближе к центру обеих групп, в то время как высоко-битвинные сотрудники распределены по всей сети, являясь мостиком между сообществами, разделение на которые будет воспроизведено на следующем шаге. Таким образом, с учётом того, что иерархическая структура данной компани, вероятно, подразумевает более активное корпоративное общение в рамках дпартамента, будет особенно интересно взглянуть на должности и взаимодействие важных по Степени сотрудников. 
+
+
+### Выявление сообществ
+
+**Использованные меры выделения сообществ: алгоритм Walk Trap**
+
+Выделенные сообщества и их численность:
+```{r message = F,warning=FALSE}
+wtcommune = walktrap.community(net)
+V(net)$wt = membership(wtcommune)
+t = table(V(net)$wt)
+as.table(t)
+```
+
+Проверим качество разбиение с помощью меры Модулярности:
+```{r message = F,warning=FALSE}
+modularity(wtcommune) 
+```
+
+Визуализируем сообщества и посмотрим на то, какие должности занимают самые значимые в сообществах сотрудники
+Примечание: Так как изначально не было данных о позиции Elizabeth Taylor - наиболее важного по степени и битвиности сотрудника, я делаю допущение, что её должность в "Enron" соответствует занимаемой ею после банкротсва "Enron" должности в компании "Centaurus Advisors, LLC" - должность Office Manager 
+(смотр. ref.1)
+```{r message = F,warning=FALSE}
+vertexes_metrics$position[vertexes_metrics$email == "liz.taylor"] = "Manager" 
+vertexes_metrics = vertexes_metrics %>% filter(position != "NA")
+V(net)$position = vertexes_metrics$position
+
+
+pl3 = ggraph(net, layout = 'kk') +
+      geom_node_point(aes(filter = degree >= quantile(degree, 0.9) | betweenness >= quantile(betweenness, 0.9), size = log(degree(net)),
+                           colour = factor(V(net)$wt)),alpha = 0.6,) +
+      geom_node_point(aes(filter = degree < quantile(degree, 0.9) | betweenness < quantile(betweenness, 0.9), size = log(degree(net)),
+                          colour = factor(V(net)$wt)), alpha = 0.6) +
+      geom_edge_link(width = 0.1, alpha = 0.15, start_cap = circle(2, 'mm'), end_cap =
+                       circle(2, 'mm'), colour = "grey20") +
+      theme_void() +
+      theme(legend.position = "none")
+
+
+
+pl4 = ggraph(net, layout = 'kk') +
+      geom_node_point(aes(filter = degree >= quantile(degree, 0.9) | betweenness >= quantile(betweenness, 0.9), size = log(degree(net)),
+                           colour = factor(V(net)$wt)),alpha = 0.6,) +
+      geom_node_point(aes(filter = degree < quantile(degree, 0.9) | betweenness < quantile(betweenness, 0.9), size = log(degree(net)),
+                          colour = factor(V(net)$wt)), alpha = 0.6) +
+      geom_edge_link(width = 0.1, alpha = 0.15, start_cap = circle(2, 'mm'), end_cap =
+                       circle(2, 'mm'), colour = "grey20") +
+      geom_node_text(aes(filter = (V(net)$wt == 2 | V(net)$wt == 3) & (degree >= quantile(degree, 0.6)) & (V(net)$degree != 2140), label = V(net)$position, size = 1), check_overlap = T) +
+     geom_node_text(aes(filter = V(net)$degree == 2140, label = "Manager", size = 1, nudge_y = -0.1, nudge_x = -0.2))+
+      theme_void() +
+      theme(legend.position = "none")
+figure_2 = ggarrange(pl3,pl4,labels = c("", ""),nrow = 1, ncol = 2)
+figure_2
+
+
+
+```
+
+
+*Вывод:* Оба сообщества смешанные и составлят из сотрудников различных по должностям и их направленностям. В зелёном, равно как и в голубом сообществах присутствуют, как высокопоставленные так и штатные сотрудники. Однако, стоит заиметить, что в зелёном сообществе среди относительно важных сотрудников нет ни одного трейдера, в то время как в голубом сообществе их несколько, что позволяет предположить, что голубой департамент ориентирован на торговлю. Значение модулярности ~ 0.276, что говорит об относительно неплохом качестве разбиения.
+
+
+### Исследовательские вопросы
+
+**Вопрос 1: Склонны ли сотрудники отправлять письма коллегам cо схожими должностями?**
+
+Проверим через показатель ассортотивности:
+
+```{r message = F,warning=FALSE}
+assortativity_nominal(net, as.factor(V(net)$position), directed = T)
+```
+Значение хоть и не равное, но близкое к 0, что говорит о том, что связи формируются без привязки к должности 
+
+Проверим этот результат с помощью теста перестановок:
+
+```{r message = F,warning=FALSE}
+set.seed(8888)
+number_of_permutations = 2000
+assortativity_shuffled  <- rep(NA, number_of_permutations)
+for(i in 1:number_of_permutations){
+  V(net)$attr_shuffled = sample(as.factor(V(net)$position), replace = F)
+  assortativity_shuffled[i] = assortativity_nominal(net,V(net)$attr_shuffled, directed = T)
+}
+q = quantile(assortativity_shuffled, c(0.05, 0.95))
+assortativity_real = assortativity_nominal(net, as.factor(V(net)$position), directed = T)
+
+pvalue = sum(assortativity_shuffled <= assortativity_real) / number_of_permutations
+pvalue
+```
+```{r message = F,warning=FALSE}
+library(ggplot2)
+df_as = data.frame(assortativity_shuffled = assortativity_shuffled) 
+ggplot(df_as) +
+  geom_histogram(aes(assortativity_shuffled), fill="lightgreen") + 
+  geom_vline(xintercept=assortativity_real, color="black")+ 
+  geom_vline(xintercept=q[1], color="red") +
+  geom_vline(xintercept=q[2], color="red") + theme_bw()
+
+
+```
+
+*Вывод:* Тест перестановок выявил, что полученный результат ассортотивности (0.02757563) статистически не значим (на уровне значимости 0.05), что не позволяет нам на основании данного результата делать выводы о склонности сотрудников оправлять письма коллегам со схожими должностями
+
+
+
+**Вопрос 2: Правда ли что сотрудники склонны пользоваться функцией Скрытой копии при отправке писем на тему Банкротства компании?**
+
+С помощью визуализации посмотрим, с какой интенсивностью формировались эти связи 
+```{r message = F,warning=FALSE}
+down = ggraph(net, layout = "stress") +
+      geom_node_point(aes(filter = V(net)$degree <= 101, size = log(V(net)$degree)
+                          ),alpha = 0.5,col = "grey20") +
+      geom_node_point(aes(filter = V(net)$degree > 101, size = log(V(net)$degree)
+                          ), col = "#63B8FF", alpha = 0.7) +
+  geom_edge_link(aes(filter = E(net)$LDC_topic == 16, edge_colour = "red"), width = 0.2, alpha = 0.6, start_cap = circle(2, 'mm'), end_cap = circle(2, 'mm'), arrow = arrow( angle = 10, length = unit(0.05, "inches"), ends = "last", type = "closed")) +
+      theme_void() +
+      theme(legend.position = "none")
+
+
+bcc = ggraph(net, layout = "stress") +
+      geom_node_point(aes(filter = V(net)$degree <= 101, size = log(V(net)$degree)
+                          ),alpha = 0.5,col = "grey20") +
+      geom_node_point(aes(filter = V(net)$degree > 101, size = log(V(net)$degree)
+                          ), col = "#63B8FF", alpha = 0.7) +
+  geom_edge_link(aes(filter = E(net)$Reciptype == "bcc", edge_colour = "red"), width = 0.2, alpha = 0.6, start_cap = circle(2, 'mm'), end_cap = circle(2, 'mm'), arrow = arrow( angle = 10, length = unit(0.05, "inches"), ends = "last", type = "closed"))+
+      theme_void() +
+      theme(legend.position = "none")
+library(ggpubr)
+figure_3 = ggarrange(down,bcc, labels = c("Downfall", "Blind Copy"),nrow = 2, ncol = 1)
+figure_3
+```
+
+Визуально не очевидно есть ли взаимосвязь между этими типами писем, проверим  корреляцию, при этом принебрежём количеством связей между одними и теми же сотрудниками, ведь интересно изучить не привычки конкретных акторов, а склонность к такому паттерну в целом:
+
+```{r message = F,warning=FALSE}
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(igraph)
+
+df_downfall = df %>% mutate(if_down = if_else(LDC_topic == 16, 1, 0)) %>% select(from,to,if_down) %>% group_by(from,to) %>% summarise(if_down = sum(if_down)) %>% mutate(if_down = if_else(if_down > 0, 1, 0)) %>%  pivot_wider(names_from = to, values_from = if_down, values_fill = 0 ) %>% column_to_rownames("from")
+matrix_downfall =  as.matrix.data.frame(df_downfall)
+
+df_bcc = df %>% mutate(if_bcc = if_else(Reciptype == "bcc", 1, 0)) %>% select(from,to,if_bcc) %>%   group_by(from,to) %>% summarise(if_bcc = sum(if_bcc)) %>% mutate(if_bcc = if_else(if_bcc > 0, 1, 0)) %>% pivot_wider(names_from = to, values_from = if_bcc, values_fill = 0 ) %>% column_to_rownames("from")
+matrix_bcc = as.matrix.data.frame(df_bcc)
+
+detach("package:igraph")
+library(sna)
+gcor(matrix_downfall, matrix_bcc, mode = "digraph")
+
+
+```
+
+Получили среднее значние корреляции, проверим его на статистическую значимость:
+
+```{r message = F,warning=FALSE}
+bcc_down = list(matrix_bcc, matrix_downfall)
+set.seed(8888) 
+bd.qap = qaptest(bcc_down, gcor, g1=1, g2=2, reps=1000) 
+summary(bd.qap)
+```
+	
+```{r message = F,warning=FALSE}
+plot(bd.qap, xlim = c(-0.25, 0.5))
+abline(v = 0.4929632, col = "red") 
+```
+
+*Вывод:* Максимальное полученное при тесте значение = 0.03442569 сильно меньше, чем то, что получено по выборке. Следовательно, согласно тесту, получить такое значение случайно невозможно, что говорит о статистической значимости полученного результата корреляции. Таким образом, существует статистически значимая связь между написанием сотрудником письма на тему "Банкротство" и использованием им функции Cкрытой копии (Blind Copy).
+
+	
+## Место сотрудника в сети
+
+Исследуемый мною сотрудник:
+```{r message = F,warning=FALSE}
+library(igraph)
+hw_net_get_vertex(net)
+```
+
+Важность сотрудника по мерам Степени и Центральности по посредничеству:
+```{r message = F,warning=FALSE}
+vertexes_metrics_filt_d2 = vertexes_metrics %>% top_n(15,degree) %>% select(-betweenness)
+colnames(vertexes_metrics_filt_d2)[4] ="centrality"
+vertexes_metrics_filt_b2 = vertexes_metrics  %>% top_n(15,betweenness) %>% select(-degree) 
+colnames(vertexes_metrics_filt_b2)[4] ="centrality"
+
+emp_name = "John Lavorato"
+
+compare2 = rbind(vertexes_metrics_filt_d2 %>% mutate(measure = "degree"),
+vertexes_metrics_filt_b2 %>% mutate(measure = "betweenness")) %>% mutate(highlight = if_else(name == emp_name, 1, 0))
+
+ggplot(compare2) + geom_col(aes(x = reorder(name,centrality), y = centrality, fill = as.factor(highlight))) + facet_wrap(~measure, scales = "free") + coord_flip() + xlab("emloyee") +theme(legend.position = "none") + scale_fill_manual(values=c("grey", "gold")) 
+
+```
+
+Определим его должность и место в сети относительно сотрудников с наивысшими Степенью и Битвинностью:
+
+```{r message = F,warning=FALSE}
+gr_degree_john = ggraph(net, layout = "kk") +
+      geom_node_point(aes(filter = degree < quantile(degree, 0.9), size = log(V(net)$degree)
+                          ),alpha = 0.5,col = "gray60") +
+      geom_node_point(aes(filter = degree >= quantile(degree, 0.9), size = log(V(net)$degree)
+                          ), col = "darksalmon", alpha = 0.8) +
+      geom_node_point(aes(filter = V(net)$Name == "John Lavorato", size = log(V(net)$degree)
+                          ), col = "gold",  alpha = 1) +
+      geom_edge_link(width = 0.05, alpha = 0.15, start_cap = circle(2, 'mm'), end_cap =
+                       circle(2, 'mm'), edge_colour = "grey20", arrow = arrow( angle = 10, length = unit(0.05, "inches"), ends = "last", type = "closed")) +
+   geom_node_text(aes(filter = V(net)$Name == "John Lavorato", label = "John Lavorato: CEO", size = log(V(net)$degree)/3), alpha = 1, nudge_y = 0.2 ) +
+      theme_void() +
+      theme(legend.position = "none") 
+
+gr_betw_john = ggraph(net, layout = "kk") +
+      geom_node_point(aes(filter = V(net)$betweenness < quantile(betweenness, 0.9), size = log(V(net)$betweenness)),alpha = 0.5,col = "gray60") +
+      geom_node_point(aes(filter = V(net)$betweenness < 1, size = 0.01/100000),alpha = 0.5, col = "gray60") +
+      geom_node_point(aes(filter = V(net)$betweenness >= quantile(betweenness, 0.9), size = log(V(net)$betweenness)), col = "cornflowerblue", alpha = 0.8) +
+      geom_node_point(aes(filter = V(net)$Name == "John Lavorato", size = log(V(net)$degree)
+                          ), col = "gold",  alpha = 1) +
+      geom_edge_link(width = 0.05, alpha = 0.15, start_cap = circle(2, 'mm'), end_cap =
+                       circle(2, 'mm'), edge_colour = "grey20", arrow = arrow( angle = 10, length = unit(0.05, "inches"), ends = "last", type = "closed")) +
+   geom_node_text(aes(filter = V(net)$Name == "John Lavorato", label = "John Lavorato: CEO", size = log(V(net)$degree)/8), alpha = 1, nudge_y = 0.2 ) +
+      theme_void() +
+      theme(legend.position = "none") 
+
+library(ggpubr)
+figure_4 = ggarrange(gr_degree_john,gr_betw_john,labels = c("Degree", "Betweenness"),nrow = 1, ncol = 2)
+figure_4
+
+```
+
+
+
+А также обозначим его принадлежность к сообществу (выделен тёмно-зелёным): 
+```{r message = F,warning=FALSE}
+ggraph(net, layout = 'kk') +
+      geom_node_point(aes(filter = degree >= quantile(degree, 0.9) | betweenness >= quantile(betweenness, 0.9), size = log(degree(net)),
+                           colour = factor(V(net)$wt)),alpha = 0.4,) +
+      geom_node_point(aes(filter = degree < quantile(degree, 0.9) | betweenness < quantile(betweenness, 0.9), size = log(degree(net)),
+                          colour = factor(V(net)$wt)), alpha = 0.4) +
+   geom_node_point(aes(filter = V(net)$Name == "John Lavorato", size = log(degree(net)), colour = factor(V(net)$wt)), alpha = 1) +
+      geom_edge_link(width = 0.1, alpha = 0.15, start_cap = circle(2, 'mm'), end_cap =circle(2, 'mm'), colour = "grey20") +
+  geom_node_text(aes(filter = V(net)$Name == "John Lavorato", label = "John Lavorato: CEO", size = log(V(net)$degree)/3), alpha = 1, nudge_y = 0.4 ) +
+      theme_void() +
+      theme(legend.position = "none")
+```
+
+
+
+
+*Вывод:* John Lavorato обладает достаточно высокой важностью как по Степени так и по Битвинности. Он находится в  центре самого многочисленного зелёного сообщества, что определяет его вероятную принадлежность к выделенному департаменту. Наиболее примечательно то, что он занимает должность Chief Executive Officer, что объясняет его высокую, но не наивысшую значимость в сети. Иерархически он стоит высоко, однако вряд ли в его обязанности входит заниматься операционной дейтельностью и активной корпоративной перепиской, что отражается на его месте в сети.
+
+## Общие выводы
+
+В ходе анализа части Сети, основанной на корпоративной переписке сотрудников энергетической компании Enron было выявлено, что в компании существует четкое разделение на 2 кластера, вероятно являющиеся департаментами/отделениями. Данные департаменты отличаются по своему назначению/роду деятельности. Наибольшее по численности сотрудников отделение имеет нелинейную иерархическую структуру и имеет несколько центральных, особо важных по метрикам центральности сотрудников, среди них Elizabeth Taylor - Office Manager (по допущению) , Louisa Kitchen - Президент, руководитель и разработчик ПО EnronOnline , John Lavorato - CEO.
+Так же были поставлены 2 исследовательских вопроса. Наиболее примечательным я считаю вывод о существовании склонности сотрудников пользоваться функцией Скрытой копии при отправке писем на тему Банкротства компании. 
+Этот вывод любопытен, ведь рассмотренная переписка относится к периоду январь-март 2002 года, когда как 2 декабря 2001 года компания объявила о банкротстве в следствии выявленных махинаций с бухгалтерией. Таким образом, результат анализа косвенно показывает настрой сотрудников по отношению к руководству компании в сложный для неё период.   
+
+ref. 1: https://littlesis.org/person/49761-Elizabeth_Taylor
+
